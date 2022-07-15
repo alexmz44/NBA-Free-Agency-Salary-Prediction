@@ -9,6 +9,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+#PART 1 TIDYING UP THE CURRENT FREE AGENTS
+
+
 ```{r Scraping the Data}
 #retrieve appropriate packages
 library(rvest)
@@ -25,18 +28,21 @@ fa <- html_table(fatable, fill = T, header = T)[[1]]
 
 #transform into a data frame
 fa_df <- as.data.frame(fa)
-head(fa_df)
 dim(fa_df)
 
 #Erase the first word of a column; oddly enough, it was separated by 4 spaces.
-fa_df$`Player (190)` <- word(fa_df$`Player (190)`, 2, sep = "    ")
+fa_df$`Player (189)` <- word(fa_df$`Player (189)`, 2, sep = "    ")
 head(fa_df)
 
 # rename the player column
 fa_df <- fa_df %>%
-  rename(Player = `Player (190)`)
+  rename(Player = `Player (189)`)
 
 ```
+
+
+
+
 
 Now I need to scrape average stats from another website and match the free agent names to those stats
 ```{r Cleaning the Data}
@@ -100,7 +106,11 @@ head(new_df)
 
 ```
 
-After this, we begin cleaning the data, and we start the process of selecting our variables.
+
+
+
+
+We finalize cleaning our tidy table by getting rid of the redundancy.
 ```{r Extract the Duplicate Rows}
 # clean up the table 
 
@@ -120,13 +130,31 @@ head(df)
 
 # antijoin with the rows we do not want, this takes those rows out
 df2 <- new_df %>% anti_join(df)
-df2
+dim(df2)
 
 
 ```
 
-Now, the data is tidy, and it now time to do the fun part. We have to begin building the model. This begins with recognizing what variables we should be choosing in order to build a solid model.
-```{r Exploratory Analysis}
+
+#PART 2: TIDYING UP THE PAST FREE AGENTS
+```{r PAST FREE AGENTS 2016 - 2021}
+# this a loop done that grabs all of the tables across multiple pages and combines them into one table. It then merges them with 
+years <- c(2016:2021)
+column_names <- c("Rk","Player","Pos","Age","Type","OTm","2020-21 Stats","WS","NTm","Terms","Notes")
+final_table <- {}
+for(i in 1:length(years)){
+  
+url <- paste0("https://www.basketball-reference.com/friv/free_agents.cgi?year=",years[i])
+  
+  past_free_agency_page <- read_html(url)
+  
+  past_free_agency_webtable<- html_nodes(past_free_agency_page, "table")
+  
+  past_free_agency_table <- html_table(past_free_agency_webtable, header = T)[[1]]
+  
+  final_table <- rbind(past_free_agency_table, final_table)
+}
+
 
 ```
 
