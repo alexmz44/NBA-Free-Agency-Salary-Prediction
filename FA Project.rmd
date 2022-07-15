@@ -1,0 +1,516 @@
+---
+title: "Personal Free Agency Project"
+author: "Alexander Martinez"
+date: "6/21/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#PART 1 Retreieving The Data
+```{r Scraping the Data, include = F, echo = F}
+#retrieve appropriate packages
+library(rvest)
+library(stringr) 
+library(tidyverse)
+library(stringi)
+library(data.table)
+library(stringr)
+library(Hmisc)
+library(car)
+library(corrplot)
+library(olsrr)
+library(lmtest)
+library(reactablefmtr)
+library(MASS)
+library(dplyr)
+library(purrr)
+
+#read in the data by scraping it from spotrac.com
+
+faurl <- "https://www.spotrac.com/nba/free-agents/"
+webpage <- read_html(faurl)
+fatable <- html_nodes(webpage,"table")
+fa <- html_table(fatable, fill = T, header = T)[[1]]
+
+#transform into a data frame
+fa_df <- as.data.frame(fa)
+dim(fa_df)
+
+#Erase the first word of a column; oddly enough, it was separated by 4 spaces.
+fa_df[,1] <- word(fa_df[,1], 2, sep = "    ")
+head(fa_df)
+
+# rename the player column
+colnames(fa_df)[1] <- "Player"
+
+```
+
+
+
+
+
+Now I need to scrape average stats from another website and match the free agent names to those stats
+```{r Cleaning the Data, include = F, echo = F}
+# Find css selector
+css_selector <- "#div_per_game_stats"
+statpage <- "https://www.basketball-reference.com/leagues/NBA_2022_per_game.html"
+
+#use pipelines to get the tables
+nba_stats <- statpage %>%
+  read_html()%>%
+  html_element(css = css_selector) %>%
+  html_table()
+# remove rank column
+nba_stats <- nba_stats %>%
+  dplyr::select(-Rk)
+# every column is character, which is not correct
+sapply(nba_stats,class)
+# make an object with all of the numeric columns
+cols.num <- names(nba_stats[,c(3,5:29)])
+# convert all into numeric
+nba_stats[cols.num] <- sapply(nba_stats[cols.num], as.numeric)
+
+
+tail(nba_stats)
+# some of the names do not match exactly, we must go in and manually input them, 
+
+# Using recode to change all of the names that do not match
+fa_df <- fa_df %>%
+  mutate(Player = dplyr::recode(Player, 
+                         "Bruce Brown Jr." = "Bruce Brown",
+                         "Patrick Mills" = "Patty Mills",
+                         "Mohamed Bamba" = "Mo Bamba",
+                         "Louis Williams" = "Lou Williams",
+                         "Sviatoslav Mykhailiuk" = "Svi Mykhailiuk",
+                         "Jae’Sean Tate" = "Jae'Sean Tate",
+                         "Nicolas Claxton" = "Nic Claxton",
+                         "Danuel House" = "Danuel House Jr.",
+                         "Ishmail Wainright" = "Ish Wainright",
+                         "R.J. Nembhard" = "RJ Nembhard Jr.",
+                         "Lindell Wiggington" = "Lindell Wigginton",
+                         "Dennis Schröder" = "Dennis Schroder"
+                         ))
+# imputing the average career stats for DNP's
+#T.J. Warren
+nba_stats[nrow(nba_stats) + 1,] <- list("T.J. Warren","SF",28,"IND" , NA, NA, NA, 6.4,12.6,.507,.7,2.1,.357,5.7,10.5,.536,.536,1.9,2.5,.78,1.4,2.8,4.1,1.2,1.0,.5,1.0,2.4,15.5)
+#John Wall
+nba_stats[nrow(nba_stats) + 1,] <- list("John Wall","PG",31,"HOU", NA, NA, NA, 6.9, 16, .431, 1.0, 3.1, .323, 5.9, 12.9,.457,.462,4.3,5.5,.779,.6,3.7,4.3,9.1,1.7,.7,3.8,2.2,19.1)
+#Kendrick Nunn
+nba_stats[nrow(nba_stats) + 1,] <- list("Kendrick Nunn","PG",26,"LAL", NA, NA, NA, 5.9, 12.8, .458, 2.1, 5.8, .364, 3.7, 7,.535,.540,1.1,1.3,.881,.3,2.6,2.9,3.0,.9,.2,1.6,2.1,15.0)
+
+
+# Now we want to deal with all the names with an accent
+nba_stats$Player <- stri_trans_general(str = nba_stats$Player,
+                                   id = "Latin-ASCII")
+
+# merge the tables based on player name
+new_df <- merge(fa_df, nba_stats, by = "Player")
+dim(new_df)
+head(new_df)
+
+
+
+
+
+
+  
+
+
+
+```
+
+
+#PART 2: TIDYING UP THE PAST FREE AGENTS
+```{r PAST FREE AGENTS 2016 - 2021 , include = F, echo = F}
+#Tidy up the 2022 table
+
+df2022 <- new_df %>%
+  add_count(Player) %>%
+  filter(n == 1 | n > 1 & Tm == "TOT") %>%
+  dplyr::select(-n) %>%
+  mutate(years = 2022) %>% 
+  dplyr::select(-Rights, -Exp, - Tm, - Age.y, - Pos) %>%
+  rename(Age = Age.x, AAV = `2021-2022 AAV`) %>%
+  dplyr::select(Player, Age, Team, Pos., years, Type, AAV, everything()) %>%
+  mutate(across(.cols = "AAV",
+                .fns = parse_number)) %>%
+  mutate(AAV = AAV/1000000) 
+
+
+
+# create a function that gets the dfs from the web page
+get_df <- function(year) {
+  "https://www.basketball-reference.com/friv/free_agents.cgi?year=" %>%
+    paste0(., year) %>%
+    read_html() %>%
+    html_table() %>%
+    .[[1]] %>% 
+    mutate(years = year) %>% 
+    dplyr::select(Rk, years, everything())
+}
+# use this function to map all the data frames together using the function
+df_past_fa <- map_dfr(2016:2021, get_df)
+
+
+
+# remove all of the "header" rows.
+df_past_fa <- df_past_fa[-seq(21,nrow(df_past_fa),21),]
+# take out columns we do not need
+df_past_fa <- df_past_fa %>%
+  dplyr::select(-`2016-17 Stats`, -`2017-18 Stats`,-`2018-19 Stats`, -`2019-20 Stats`, - `2015-16 Stats`, -`2020-21 Stats`,-Notes)
+
+separate_dfs <- split(df_past_fa, df_past_fa$years)
+# assigns all the dfs in the least to their own dataframe
+for(i in 1:length(separate_dfs)){
+  assign(paste("df",i, sep=""), as.data.frame(separate_dfs[[i]]))
+}
+
+# read in all of the stats from the basketball reference website
+#create a function first
+get_stats <- function(year){
+    paste0("https://www.basketball-reference.com/leagues/NBA_",year,"_per_game.html") %>%
+    read_html() %>%
+    html_table()%>%
+    .[[1]] %>%
+    mutate(years = year) %>%
+    dplyr::select(Rk, years, everything())
+}
+# loop it to assign all the different stats tables to each of their respective years
+for(i in 2016:2021){
+  assign(paste("stats",i, sep = ""), as.data.frame(get_stats(i)))
+}
+# lists for looping and merging
+list_stats <- list(stats2016, stats2017, stats2018, stats2019, stats2020, stats2021)
+list_df <- list(df1,df2,df3,df4,df5,df6)
+master_list <- vector(mode = "list", length = 6)
+# create a for loop that omits all of the duplicate rows and unwanted rows
+for(i in 1:length(list_stats)){
+  list_stats[[i]] <- list_stats[[i]] %>% 
+    add_count(Player) %>%
+    filter(n == 1 | n > 1 & Tm =="TOT") %>% 
+      dplyr::select(-n)
+ 
+   master_list[[i]] <- merge(list_stats[[i]], list_df[[i]], by = "Player")
+  
+}
+list_df[[1]]
+#combine the list to make a master data frame
+master_df <- do.call("rbind", master_list)
+
+
+
+
+
+#Feature Engineering for the master set
+list(names(master_df), names(df2022))
+
+master_df <- master_df %>%
+  dplyr::select(-Rk.x, -years.x,-Rk.y, -Pos.y,-Age.y, -NTm, -OTm) %>%
+  rename(years= years.y, Pos. = Pos.x, Team = Tm, Age = Age.x) %>% 
+  dplyr::select(Player, Age, Team, Pos., years, Type, everything())
+master_df
+# we parsed up the numbers in the term columns to get only the integers, this allows it to be in the same format as the 2022 set
+
+master_df <- master_df %>%
+  separate(Terms, into = c("V1", "V2"), sep = "yr", remove = F) %>%
+  mutate(AAV = (parse_number(V2)/parse_number(V1))*1000000) %>% 
+  filter(!is.na(AAV))%>%
+  mutate(AAV = AAV/1000000)%>%
+  dplyr::select(-V1,-V2, -WS,-Terms) %>%
+  dplyr::select(Player, Age, Team, Pos., years, Type, AAV, everything())
+
+# everything is all tidy'd up, we rbind now
+
+
+final_df <- rbind(master_df, df2022) 
+
+
+# Huge error to fix in data 
+final_df[49,7] <- .98
+
+# convert all into numeric
+#changing the columns to their appropriate class
+sapply(final_df, class)
+cols.num2 <- names(final_df[,c(2,5,7:32)])
+final_df[cols.num2] <- sapply(final_df[cols.num2], as.numeric)
+
+```
+# Selection Criterion Model Building
+
+```{r, include = F, echo = F}
+
+# visualizing the distributions of the dataset for all the 2016 - 2022
+final_df %>% 
+  dplyr::select(-AAV) %>%
+  keep(is.numeric) %>%
+  gather() %>%
+  ggplot() +
+  geom_histogram(mapping = aes(x = value, fill = key), color = "black") +
+  facet_wrap(~key, scales = "free") + 
+  theme_minimal()
+# checking fro correlation
+final_df %>%
+  keep(is.numeric) %>%
+  cor(use = "complete.obs")
+# taking off variables based on VIF 
+final_df <- final_df %>% 
+  mutate(years = as.factor(years)) %>%
+  mutate(Type = as.factor(Type)) %>%
+  dplyr::select(-Player,-Team,-Pos., -FGA, -FG, -`3P`, -`3PA`, -ORB, -DRB, -`2P`, -`2PA`, - FT, -FTA) 
+# split the datasets
+set.seed(1234)
+sample_set <- sample(nrow(final_df),round(nrow(final_df)*.75), replace = F) 
+train_df <- final_df[sample_set,]
+test_df <- final_df[-sample_set,]
+
+
+
+#run the the regression model for all the data from 2016 - 2022
+train.model <- lm(formula = AAV ~ ., data = train_df)
+summary(train.model)
+# plot 
+plot(train.model)
+
+# check the vif for multicollinearity. I removed some variables based on their 
+# variance inflation factor
+vif(train.model)
+# selection criteria based on a few methods
+#forward selection
+fwd.p <- olsrr::ols_step_forward_p(train.model, penter = .05)
+fwd.aic <- olsrr::ols_step_forward_aic(train.model)
+
+## I will use for step selection as this is the lowest MSE that I could find
+fwd.p
+fwd.aic
+
+
+bwd.p <- olsrr::ols_step_backward_p(train.model, penter = .05)
+bwd.aic <- olsrr::ols_step_backward_aic(train.model)
+
+bwd.p
+bwd.aic
+dim(train_df)
+```
+
+#Trained Model - Validation
+```{r , include = F, echo = F}
+# final model
+final.model <- lm(AAV ~ PTS + GS + years + PF + STL + BLK + AST + TOV + TRB + MP, data = train_df)
+summary(final.model)
+
+AIC(final.model)
+
+BIC(final.model)
+
+# model validation
+final.model.valid <- lm(AAV ~ PTS + GS + Type + years + AST + TOV + TRB + PF + Age, data = test_df)
+summary(final.model.valid)
+
+AIC(final.model.valid)
+
+BIC(final.model.valid)
+
+#checking assumptions of the model
+# normal distribution of errors
+# checks out
+hist(final.model$residuals, color = "grey")
+hist(final.model.valid$residuals)
+
+# seems to be a pattern in the residual vs. fitted plots 
+plot(final.model)
+plot(final.model.valid)
+
+# autocorrelation test
+# it indicates a very , very slight positive autocorrelation
+dwtest(final.model)
+
+# use the trained model on the test dataset to predict test values
+# we can then generate the the r-squared value
+test_df$predictedAAV <- predict(final.model, test_df)
+head(test_df[, c("AAV", "predictedAAV")])
+
+actual <- test_df$AAV
+preds <- test_df$predictedAAV
+rss <- sum((preds - actual) ^ 2)
+tss <- sum((actual - mean(actual))^2)
+rsq <- 1 - rss/tss
+rsq
+```
+
+#Predictions
+```{r, include = F, echo = F}
+# the model seems to have a a consistent accuracy of about 65%
+df2022 <- df2022 %>%
+  mutate(years = as.factor(years)) %>%
+  mutate(Type = as.factor(Type))
+
+prediction_intervals <- as.data.frame(predict(final.model, df2022, interval = "pred"))
+
+confidence_intervals <- as.data.frame(predict(final.model, df2022, interval = "conf"))
+
+
+
+#prediction intervals - account for uncertainty
+# make a top 10 dataframes
+pred_top_10 <- prediction_intervals %>% 
+  arrange(desc(fit)) %>%
+  slice(1:10)
+# create a dataframe of all the neccessary info
+pred_df <- pred_top_10 %>%
+  mutate(Player = df2022[rownames(conf_top_10),1]) %>%
+  mutate(`Expected AAV` = round(fit, 2)) %>%
+  mutate(`Expected AAV Upper Limit` = round(upr, 2))%>%
+  mutate(`Expected AAV Lower Limit` = round(lwr, 2))%>%
+  mutate(Age = round(df2022[rownames(conf_top_10),2]))%>%
+  mutate(`Previous Team` = df2022[rownames(conf_top_10),3])%>%
+  dplyr::select(Player,Age,`Previous Team`, `Expected AAV`, `Expected AAV Upper Limit`, `Expected AAV Lower Limit`)
+rownames(pred_df) <- NULL 
+# Confidence intervals - probability of certainty
+
+
+conf_top_10 <- confidence_intervals %>% 
+  arrange(desc(fit)) %>%
+  slice(1:10)
+# create a dataframe of all the neccessary info
+
+conf_df <- conf_top_10 %>%
+  mutate(Player = df2022[rownames(conf_top_10),1]) %>%
+  mutate(`Expected AAV` = round(fit, 2)) %>%
+  mutate(`Expected AAV Upper Limit` = round(upr, 2))%>%
+  mutate(`Expected AAV Lower Limit` = round(lwr, 2))%>%
+  mutate(Age = round(df2022[rownames(conf_top_10),2]))%>%
+  mutate(`Previous Team` = df2022[rownames(conf_top_10),3])%>%
+  dplyr::select(Player,Age,`Previous Team`, `Expected AAV`, `Expected AAV Upper Limit`, `Expected AAV Lower Limit`)
+rownames(conf_df) <- NULL
+
+```
+
+
+#Table 1 Creation
+```{r, echo}
+reactable(pred_df,
+          theme = fivethirtyeight(),
+          columnGroups = list(
+            colGroup(name = "Prediction Intervals - 2022 Free Agency - Highest Projected Salaries (In Millions)", columns = c("Player", "Age", "Previous Team","Expected AAV","Expected AAV Upper Limit","Expected AAV Lower Limit"))
+          )
+          )
+
+
+
+```
+#Table 2 Creation
+```{r}
+reactable(conf_df,
+          theme = fivethirtyeight(),
+          columnGroups = list(
+            colGroup(name = "Confidence Intervals - 2022 Free Agency - Highest Projected Salaries (In Millions)", columns = c("Player", "Age", "Previous Team","Expected AAV","Expected AAV Upper Limit","Expected AAV Lower Limit"))
+          )
+          )
+```
+#Visualization
+```{r}
+library(cowplot)
+library(colorspace)
+library(ggrepel)
+library(RColorBrewer)
+# get all the predicted values into a data frame with everything else
+
+# retrieve all dataframes from 2016 - 2022
+viz_df <- rbind(master_df, df2022)
+cols.num3 <- names(viz_df[,c(2,5,7:32)])
+viz_df[cols.num3] <- sapply(viz_df[cols.num3], as.numeric)
+# calculating a gamescore according to a website
+viz_df$GmSc <- viz_df$PTS + 0.4 * viz_df$FG - 0.7 * viz_df$FGA - 0.4*(viz_df$FTA - viz_df$FT) + 0.7 * viz_df$ORB + 0.3 * viz_df$DRB + viz_df$STL + 0.7 * viz_df$AST + 0.7 * viz_df$BLK - 0.4 * viz_df$PF - viz_df$TOV 
+# remove known outlier
+viz_df[49,7] <- .98
+# get wanted variables
+viz_df <- viz_df %>%
+  dplyr::select(Player, Pos., AAV, GmSc, years) %>%
+  na.omit()
+
+
+#specify top 10 players
+viz_df <- viz_df %>%
+  mutate(label = ifelse(Player %in% df2022[rownames(pred_top_10),1] & years == 2022 , Player, "")) %>%
+  mutate(AAV = ifelse(Player == df2022[rownames(pred_top_10), 1],pred_top_10$fit, AAV)) %>%
+  mutate(Pos. = as.factor(Pos.)) %>%
+  mutate(years = as.factor(years))
+levels(viz_df$Pos.)
+viz_df$Pos. <- recode_factor(viz_df$Pos.,
+                             `PF-C` = "PF",
+                             `C-PF` = "C",
+                             `PF-SF` = "PF",
+                             `PG-SG` = "G",
+                             `SF-PF` = "F",
+                             `SF-SG` = "SF",
+                             `SG-PF` = "SG",
+                             `SG-PG` = "G",
+                             `SG-SF`= "SG")
+
+viz_df %>%
+  select(Pos.) %>%
+  distinct()
+brewer.pal(n = 10, name = "RdYlBu")
+# specify position colors
+position_colors <- c("#A50026","#D73027","#F46D43","#FDAE61", "#FEE090" ,"#E0F3F8" ,"#ABD9E9")
+viz_df %>%
+ggplot(aes(GmSc, AAV)) +
+  geom_smooth(aes(color = "y ~ log(x)", fill = "y ~ log(x)"),
+              method = "lm",
+              formula = y ~ log(x),
+              se = F,
+              fullrange = T) +
+  geom_point(
+    aes(color = years, fill = years),
+    size = 2.5, alpha = .5,
+    shape = 21
+  ) +
+  geom_text_repel(aes(label = label),
+                  color = "black",
+                  size = 3,
+                  point.padding = .1,
+                  box.padding = .6,
+                  min.segment.length = 0,
+                  max.overlaps = 1000,
+                  seed = 7645) +
+  scale_color_manual(
+    name = NULL,
+    values = darken(position_colors, .3)
+  )+
+  scale_fill_manual(
+    name = NULL,
+    values = position_colors
+  ) +
+  scale_x_continuous(
+    name = "Average Game Scores of Free Agents\n from the 2016 - 2021 Season",
+    limits = c(-2, 26),
+    expand = c(0,0)
+  ) +
+  scale_y_continuous(
+    name = "Average Annual Value (In Millions of $)"
+  )+
+  guides(
+    color = guide_legend(
+      nrow = 1,
+      override.aes = list(
+        linetype = c(rep(0,7)),
+        shape = c(rep(21,7))
+      )
+    )
+  )+
+  theme_minimal_hgrid(12, rel_small = 1)+
+  theme(
+    legend.position = "top" ,
+    legend.justification = "right",
+    legend.text = element_text(size = 9),
+    legend.box.spacing = unit(0, "pt"))+
+  ggtitle("The Top 5 Projected Salaries\nAre in the Top Half of Average Game\nScores in the Last Year")
+
+pred_top_10
+```
+
